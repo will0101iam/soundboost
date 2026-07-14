@@ -14,8 +14,8 @@
 
 ## 兼容范围
 
-- vivo：普通 Android 系统，优先走这个 APK 版本。
-- 华为：如果手机可以安装普通 APK，也优先走这个版本。
+- vivo：普通 Android 系统，优先走这个 APK 版本。当前最低支持 Android 5.0。
+- 华为：如果手机可以安装普通 APK，也优先走这个版本。当前最低支持 Android 5.0。
 - HarmonyOS NEXT：不兼容普通 APK，需要单独做 ArkTS / OHAudio 原生鸿蒙版本。
 
 第一版没有强制选择蓝牙设备，声音会走系统当前输出。测试骨传导耳机时，先在系统蓝牙里连接耳机，再打开 App。
@@ -28,7 +28,7 @@
 4. 手机打开开发者选项和 USB 调试。
 5. 点击 Run，安装到 vivo 或华为手机。
 
-如果 Android Studio 提示 SDK 版本不匹配，可以安装 Android SDK 35，或者把 `app/build.gradle` 里的 `compileSdk` 和 `targetSdk` 调成你本机已有版本。
+如果 Android Studio 提示 SDK 版本不匹配，可以安装 Android SDK 35，或者把 `app/build.gradle` 里的 `compileSdk` 和 `targetSdk` 调成你本机已有版本。`minSdk` 目前是 21，对应 Android 5.0。
 
 ## 不在本地安装 Android SDK，在线打 APK
 

@@ -9,6 +9,7 @@ import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.media.MediaRecorder;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Process;
 import android.view.Gravity;
@@ -133,7 +134,8 @@ public class MainActivity extends Activity {
     }
 
     private void startListening() {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_RECORD_AUDIO);
             return;
         }
@@ -297,29 +299,8 @@ public class MainActivity extends Activity {
             short[] input = new short[frames];
             short[] output = new short[frames];
 
-            AudioRecord recorder = new AudioRecord.Builder()
-                    .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
-                    .setAudioFormat(new AudioFormat.Builder()
-                            .setSampleRate(SAMPLE_RATE)
-                            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .build())
-                    .setBufferSizeInBytes(frames * 4)
-                    .build();
-
-            AudioTrack player = new AudioTrack.Builder()
-                    .setAudioAttributes(new AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                            .build())
-                    .setAudioFormat(new AudioFormat.Builder()
-                            .setSampleRate(SAMPLE_RATE)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .build())
-                    .setBufferSizeInBytes(frames * 4)
-                    .setTransferMode(AudioTrack.MODE_STREAM)
-                    .build();
+            AudioRecord recorder = createRecorder(frames * 4);
+            AudioTrack player = createPlayer(frames * 4);
 
             Biquad highpass = Biquad.highpass(SAMPLE_RATE, lowCut, 0.7f);
             Biquad presence = Biquad.peaking(SAMPLE_RATE, 2200, 1.0f, 4);
@@ -382,6 +363,53 @@ public class MainActivity extends Activity {
             if (sample > ceiling) return ceiling + (float) Math.tanh((sample - ceiling) * 2.5f) * 0.04f;
             if (sample < -ceiling) return -ceiling + (float) Math.tanh((sample + ceiling) * 2.5f) * 0.04f;
             return sample;
+        }
+
+        private AudioRecord createRecorder(int bufferBytes) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                return new AudioRecord.Builder()
+                        .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+                        .setAudioFormat(new AudioFormat.Builder()
+                                .setSampleRate(SAMPLE_RATE)
+                                .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .build())
+                        .setBufferSizeInBytes(bufferBytes)
+                        .build();
+            }
+            return new AudioRecord(
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufferBytes
+            );
+        }
+
+        private AudioTrack createPlayer(int bufferBytes) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                return new AudioTrack.Builder()
+                        .setAudioAttributes(new AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build())
+                        .setAudioFormat(new AudioFormat.Builder()
+                                .setSampleRate(SAMPLE_RATE)
+                                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .build())
+                        .setBufferSizeInBytes(bufferBytes)
+                        .setTransferMode(AudioTrack.MODE_STREAM)
+                        .build();
+            }
+            return new AudioTrack(
+                    android.media.AudioManager.STREAM_MUSIC,
+                    SAMPLE_RATE,
+                    AudioFormat.CHANNEL_OUT_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufferBytes,
+                    AudioTrack.MODE_STREAM
+            );
         }
     }
 
