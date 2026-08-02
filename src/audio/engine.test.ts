@@ -742,19 +742,45 @@ describe("RealtimeAudioEngine", () => {
     expect(second.close).not.toHaveBeenCalled();
   });
 
-  test("RNNoise 启动失败时清理流和 Context 后重抛", async () => {
+  test("RNNoise 启动失败时通知并保持原声旁路运行", async () => {
     const failure = new Error("RNNoise failed");
     const harness = createEngineHarness({ rnnoiseError: failure });
+    const onDenoiseUnavailable = vi.fn();
 
     await expect(
       harness.engine.start(harness.stream, DEFAULT_SETTINGS, {
         denoiseEnabled: true,
+        onDenoiseUnavailable,
       }),
-    ).rejects.toBe(failure);
+    ).resolves.toBeUndefined();
 
-    expect(harness.trackA.stop).toHaveBeenCalledTimes(1);
-    expect(harness.trackB.stop).toHaveBeenCalledTimes(1);
-    expect(harness.close).toHaveBeenCalledTimes(1);
+    expect(onDenoiseUnavailable).toHaveBeenCalledTimes(1);
+    expect(onDenoiseUnavailable).toHaveBeenCalledWith(failure);
+    expect(harness.source.connect).toHaveBeenCalledWith(harness.inputAnalyser);
+    expect(harness.inputAnalyser.connect).toHaveBeenCalledTimes(1);
+    expect(harness.inputAnalyser.connect).toHaveBeenCalledWith(
+      harness.bypassGain,
+    );
+    expect(harness.inputAnalyser.connect).not.toHaveBeenCalledWith(
+      harness.rnnoise,
+    );
+    expect(harness.denoisedGain.connect).not.toHaveBeenCalled();
+    expect(harness.bypassGain.connect).toHaveBeenCalledWith(harness.highpass);
+    expect(harness.denoisedGain.gain.value).toBe(0);
+    expect(harness.bypassGain.gain.value).toBe(1);
+    expect(harness.resume).toHaveBeenCalledTimes(1);
+    expect(harness.trackA.stop).not.toHaveBeenCalled();
+    expect(harness.trackB.stop).not.toHaveBeenCalled();
+    expect(harness.close).not.toHaveBeenCalled();
+
+    harness.engine.setDenoiseEnabled(true);
+
+    expect(
+      harness.denoisedGain.gain.linearRampToValueAtTime,
+    ).not.toHaveBeenCalled();
+    expect(
+      harness.bypassGain.gain.linearRampToValueAtTime,
+    ).not.toHaveBeenCalled();
   });
 
   test("重复读取电平时复用输入和输出缓冲区", async () => {

@@ -62,6 +62,7 @@ export type EngineStartOptions = {
   denoiseEnabled: boolean;
   outputDeviceId?: string;
   onVad?: (probability: number) => void;
+  onDenoiseUnavailable?: (error: unknown) => void;
   onTrackEnded?: () => void;
 };
 
@@ -246,7 +247,17 @@ export class RealtimeAudioEngine {
       session.source = source;
       session.inputAnalyser = inputAnalyser;
 
-      const rnnoise = await this.createRnnoiseNode(context);
+      let rnnoise: RNNoiseNode | null = null;
+      try {
+        rnnoise = await this.createRnnoiseNode(context);
+      } catch (error) {
+        if (!this.isCurrent(session)) {
+          await this.disposeSession(session);
+          return;
+        }
+        session.denoiseEnabled = false;
+        options.onDenoiseUnavailable?.(error);
+      }
       if (!this.isCurrent(session)) {
         disposeRnnoise(rnnoise);
         await this.disposeSession(session);
@@ -255,7 +266,9 @@ export class RealtimeAudioEngine {
 
       const denoisedGain = context.createGain();
       const bypassGain = context.createGain();
-      const initialMix = denoiseMix(options.denoiseEnabled);
+      const initialMix = denoiseMix(
+        rnnoise !== null && options.denoiseEnabled,
+      );
       denoisedGain.gain.value = initialMix.denoised;
       bypassGain.gain.value = initialMix.bypass;
       const highpass = context.createBiquadFilter();
@@ -307,18 +320,22 @@ export class RealtimeAudioEngine {
       session.peakCeiling = peakCeiling;
       session.outputAnalyser = outputAnalyser;
 
-      rnnoise.onstatus = (event) => {
-        if (this.isCurrent(session)) {
-          session.onVad?.(event.vadProb ?? 0);
-        }
-      };
+      if (rnnoise) {
+        rnnoise.onstatus = (event) => {
+          if (this.isCurrent(session)) {
+            session.onVad?.(event.vadProb ?? 0);
+          }
+        };
+      }
 
       this.applyInitialSettings(session, settings);
 
       source.connect(inputAnalyser);
-      inputAnalyser.connect(rnnoise).connect(denoisedGain);
+      if (rnnoise) {
+        inputAnalyser.connect(rnnoise).connect(denoisedGain);
+        denoisedGain.connect(highpass);
+      }
       inputAnalyser.connect(bypassGain);
-      denoisedGain.connect(highpass);
       bypassGain.connect(highpass);
       highpass
         .connect(lowShelf)
@@ -460,6 +477,7 @@ export class RealtimeAudioEngine {
     if (
       !session ||
       !this.isCurrent(session) ||
+      !session.rnnoise ||
       !session.denoisedGain ||
       !session.bypassGain ||
       session.denoiseEnabled === enabled

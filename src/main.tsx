@@ -284,6 +284,15 @@ function App() {
               onVad: (probability) => {
                 setVadProbability(Math.min(1, Math.max(0, probability)));
               },
+              onDenoiseUnavailable: () => {
+                if (!mounted.current) return;
+                denoiseEnabledRef.current = false;
+                setDenoiseEnabled(false);
+                setVadProbability(0);
+                setDeviceNotice(
+                  "RNNoise 降噪不可用，已自动切换为原声旁路，扩音继续运行。",
+                );
+              },
               onTrackEnded: () => {
                 if (!mounted.current) return;
                 operationGate.current?.invalidate();
