@@ -472,17 +472,19 @@ export class RealtimeAudioEngine {
     }
   }
 
-  setDenoiseEnabled(enabled: boolean) {
+  setDenoiseEnabled(enabled: boolean): boolean {
     const session = this.session;
     if (
       !session ||
       !this.isCurrent(session) ||
       !session.rnnoise ||
       !session.denoisedGain ||
-      !session.bypassGain ||
-      session.denoiseEnabled === enabled
+      !session.bypassGain
     ) {
-      return;
+      return false;
+    }
+    if (session.denoiseEnabled === enabled) {
+      return true;
     }
 
     const now = session.context.currentTime;
@@ -500,6 +502,7 @@ export class RealtimeAudioEngine {
     }
     incoming.linearRampToValueAtTime(1, fadeInEnd);
     session.denoiseEnabled = enabled;
+    return true;
   }
 
   requestVad() {

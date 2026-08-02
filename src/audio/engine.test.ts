@@ -501,10 +501,11 @@ describe("RealtimeAudioEngine", () => {
     harness.rnnoise.onstatus?.({
       vadProb: 0.83,
     } as Event & { vadProb: number });
-    harness.engine.setDenoiseEnabled(false);
+    const changed = harness.engine.setDenoiseEnabled(false);
 
     expect(harness.rnnoise.update).toHaveBeenCalledWith();
     expect(onVad).toHaveBeenCalledWith(0.83);
+    expect(changed).toBe(true);
     expect(harness.denoisedGain.gain.cancelAndHoldAtTime).toHaveBeenCalledWith(
       4,
     );
@@ -773,8 +774,9 @@ describe("RealtimeAudioEngine", () => {
     expect(harness.trackB.stop).not.toHaveBeenCalled();
     expect(harness.close).not.toHaveBeenCalled();
 
-    harness.engine.setDenoiseEnabled(true);
+    const changed = harness.engine.setDenoiseEnabled(true);
 
+    expect(changed).toBe(false);
     expect(
       harness.denoisedGain.gain.linearRampToValueAtTime,
     ).not.toHaveBeenCalled();

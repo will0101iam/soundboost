@@ -45,6 +45,8 @@ const STATUS_TEXT: Record<EngineState, string> = {
   error: "启动失败",
 };
 
+const DENOISE_BYPASS_NOTICE = "本次RNNoise不可用，已旁路";
+
 function supportsOutputDeviceSelection() {
   return (
     typeof AudioContext !== "undefined" &&
@@ -80,6 +82,7 @@ function App() {
   const [selectedInput, setSelectedInput] = useState("");
   const [selectedOutput, setSelectedOutput] = useState("");
   const [denoiseEnabled, setDenoiseEnabled] = useState(true);
+  const [denoiseAvailable, setDenoiseAvailable] = useState(true);
   const [vadProbability, setVadProbability] = useState(0);
   const [outputRoutingSupported] = useState(supportsOutputDeviceSelection);
   const [outputSelectionSupported] = useState(() =>
@@ -239,6 +242,7 @@ function App() {
       setInputLevel(0);
       setOutputLevel(0);
       setVadProbability(0);
+      setDenoiseAvailable(true);
       updateRunState("starting");
 
       try {
@@ -288,10 +292,9 @@ function App() {
                 if (!mounted.current) return;
                 denoiseEnabledRef.current = false;
                 setDenoiseEnabled(false);
+                setDenoiseAvailable(false);
                 setVadProbability(0);
-                setDeviceNotice(
-                  "RNNoise 降噪不可用，已自动切换为原声旁路，扩音继续运行。",
-                );
+                setDeviceNotice(DENOISE_BYPASS_NOTICE);
               },
               onTrackEnded: () => {
                 if (!mounted.current) return;
@@ -438,9 +441,19 @@ function App() {
     event: React.ChangeEvent<HTMLInputElement>,
   ) => {
     const enabled = event.currentTarget.checked;
+    if (
+      runStateRef.current === "running" &&
+      !engine.current?.setDenoiseEnabled(enabled)
+    ) {
+      denoiseEnabledRef.current = false;
+      setDenoiseEnabled(false);
+      setDenoiseAvailable(false);
+      setVadProbability(0);
+      setDeviceNotice(DENOISE_BYPASS_NOTICE);
+      return;
+    }
     denoiseEnabledRef.current = enabled;
     setDenoiseEnabled(enabled);
-    engine.current?.setDenoiseEnabled(enabled);
   }, []);
 
   useEffect(() => {
@@ -614,6 +627,7 @@ function App() {
                   type="checkbox"
                   checked={denoiseEnabled}
                   onChange={handleDenoiseChange}
+                  disabled={isRunning && !denoiseAvailable}
                 />
                 <span>
                   <strong>RNNoise 降噪</strong>
