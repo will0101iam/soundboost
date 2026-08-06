@@ -1,7 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
 import type { RNNoiseNode } from "simple-rnnoise-wasm";
 import {
+  canToggleDenoise,
   denoiseMix,
+  type EngineState,
   initialEngineState,
   nextEngineState,
   RealtimeAudioEngine,
@@ -35,6 +37,28 @@ describe("engine state", () => {
   test("非法转换保持当前状态", () => {
     expect(nextEngineState("idle", "STARTED")).toBe("idle");
   });
+
+  test.each<
+    { state: EngineState; available: boolean; allowed: boolean }
+  >([
+    { state: "idle", available: false, allowed: true },
+    { state: "idle", available: true, allowed: true },
+    { state: "loading-model", available: false, allowed: false },
+    { state: "loading-model", available: true, allowed: false },
+    { state: "starting", available: false, allowed: false },
+    { state: "starting", available: true, allowed: false },
+    { state: "running", available: false, allowed: false },
+    { state: "running", available: true, allowed: true },
+    { state: "stopping", available: false, allowed: false },
+    { state: "stopping", available: true, allowed: false },
+    { state: "error", available: false, allowed: true },
+    { state: "error", available: true, allowed: true },
+  ])(
+    "$state / available=$available 时切换权限为 $allowed",
+    ({ state, available, allowed }) => {
+      expect(canToggleDenoise(state, available)).toBe(allowed);
+    },
+  );
 });
 
 describe("SerialTaskQueue", () => {

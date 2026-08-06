@@ -28,6 +28,7 @@ import {
   runLatestOutputSelection,
 } from "./audio/deviceRefresh";
 import {
+  canToggleDenoise,
   type EngineState,
   RealtimeAudioEngine,
   toAudioErrorMessage,
@@ -68,6 +69,7 @@ function App() {
   const selectedInputRef = useRef("");
   const selectedOutputRef = useRef("");
   const denoiseEnabledRef = useRef(true);
+  const denoiseAvailableRef = useRef(true);
   const [runState, setRunState] = useState<EngineState>("idle");
   const [errorMessage, setErrorMessage] = useState("");
   const [deviceNotice, setDeviceNotice] = useState(
@@ -119,6 +121,10 @@ function App() {
     runState === "loading-model" ||
     runState === "starting" ||
     runState === "running";
+  const denoiseToggleAllowed = canToggleDenoise(
+    runState,
+    denoiseAvailable,
+  );
   const statusText =
     runState === "error" ? errorMessage : STATUS_TEXT[runState];
   const startButtonText =
@@ -242,6 +248,7 @@ function App() {
       setInputLevel(0);
       setOutputLevel(0);
       setVadProbability(0);
+      denoiseAvailableRef.current = true;
       setDenoiseAvailable(true);
       updateRunState("starting");
 
@@ -291,6 +298,7 @@ function App() {
               onDenoiseUnavailable: () => {
                 if (!mounted.current) return;
                 denoiseEnabledRef.current = false;
+                denoiseAvailableRef.current = false;
                 setDenoiseEnabled(false);
                 setDenoiseAvailable(false);
                 setVadProbability(0);
@@ -440,12 +448,21 @@ function App() {
   const handleDenoiseChange = useCallback((
     event: React.ChangeEvent<HTMLInputElement>,
   ) => {
+    if (
+      !canToggleDenoise(
+        runStateRef.current,
+        denoiseAvailableRef.current,
+      )
+    ) {
+      return;
+    }
     const enabled = event.currentTarget.checked;
     if (
       runStateRef.current === "running" &&
       !engine.current?.setDenoiseEnabled(enabled)
     ) {
       denoiseEnabledRef.current = false;
+      denoiseAvailableRef.current = false;
       setDenoiseEnabled(false);
       setDenoiseAvailable(false);
       setVadProbability(0);
@@ -627,7 +644,7 @@ function App() {
                   type="checkbox"
                   checked={denoiseEnabled}
                   onChange={handleDenoiseChange}
-                  disabled={isRunning && !denoiseAvailable}
+                  disabled={!denoiseToggleAllowed}
                 />
                 <span>
                   <strong>RNNoise 降噪</strong>

@@ -42,6 +42,14 @@ export function nextEngineState(
   return transitions[state]?.[event] ?? state;
 }
 
+export function canToggleDenoise(
+  state: EngineState,
+  available: boolean,
+): boolean {
+  if (state === "idle" || state === "error") return true;
+  return state === "running" && available;
+}
+
 export function toAudioErrorMessage(error: unknown) {
   if (error instanceof AudioOutputDeviceError) {
     return error.message;
