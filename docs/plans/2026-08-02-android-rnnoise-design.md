@@ -37,10 +37,16 @@ RNNoise 必须在 EQ、压缩和增益之前工作。
 
 ## RNNoise 集成
 
-- 固定使用 Xiph RNNoise 源码提交 `70f1d256acd4b34a572f999a05c87bf00b67730d`。
-- 将构建所需源码、固定模型生成产物和 BSD 许可证直接纳入仓库。
+- 固定使用 Xiph RNNoise `v0.1.1`，peeled commit
+  `6cbfd53eb348a8d394e0757b4025c6ded34eb2b6`。
+- 使用该提交 `src/rnn_data.c` 内嵌的经典小模型，不依赖外部模型
+  archive。小模型是移动端兼容边界，避免把 main 分支的大模型带入 APK
+  与 Git 历史。
+- 将 `Makefile.am` 列出的 7 个核心源、传递依赖头和 BSD 3-Clause
+  许可证直接纳入仓库。
 - GitHub Actions 构建期间不下载 RNNoise 源码或模型。
-- 使用 CMake 构建 JNI 动态库。
+- 使用 CMake 将核心构建为 C99/PIC 的 `rnnoise_core` 静态库；JNI 桥在
+  后续任务中单独链接。
 - 仅打包 `arm64-v8a` 和 `armeabi-v7a`，覆盖新旧华为 ARM 手机。
 - Java 层复用固定大小的 `short[480]` 输入输出帧，避免实时循环持续分配。
 - JNI 返回 RNNoise VAD 概率，Java 层负责语音保护策略。

@@ -110,34 +110,31 @@ Expected: FAIL，`SpeechProtection` 尚不存在。
 
 **Step 1: 获取固定源码**
 
-从 Xiph RNNoise 提交：
+从 Xiph RNNoise `v0.1.1` 的 peeled commit：
 
 ```text
-70f1d256acd4b34a572f999a05c87bf00b67730d
+6cbfd53eb348a8d394e0757b4025c6ded34eb2b6
 ```
 
-复制 `Makefile.am` 中 `RNNOISE_SOURCES` 所需源码和头文件。
+复制 `Makefile.am` 列出的 7 个库源文件及其传递依赖头文件，不复制
+仓库元数据、训练代码、示例或架构专用源码。
 
 **Step 2: 固化模型**
 
-使用上游 `model_version` 指定的 SHA-256：
-
-```text
-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37
-```
-
-下载一次、校验后，将生成的 `rnnoise_data.c`、`rnnoise_data.h` 等构建输入纳入仓库。CI 不再联网下载模型。
+直接纳入该提交 `src/rnn_data.c` 中内嵌的经典小模型，不下载或生成外部
+模型 archive。选择经典小模型是移动端兼容边界：vendor 目录保持在约
+2 MiB 以内，避免 main 分支大模型增加 APK 体积和 Git 历史负担。
 
 **Step 3: 写 CMake**
 
-- 编译 RNNoise C 源码和 JNI bridge。
-- 链接 `m` 与 Android `log`。
-- 不启用 x86 RTCD。
-- ARM64 使用编译器自动 NEON；armeabi-v7a 不假设所有设备支持高级指令。
+- 只定义 `rnnoise_core` 静态库，编译 7 个经典 RNNoise C 源。
+- 使用 C99、PIC、公开/私有 include 路径并链接 `m`。
+- 本任务不引用 JNI、Android `log` 或架构专用源码。
 
 **Step 4: 检查许可证和来源**
 
-`UPSTREAM.md` 记录提交、模型哈希、来源 URL 和 BSD 许可证。
+`UPSTREAM.md` 记录 `v0.1.1`、peeled commit、内嵌模型、vendored
+文件范围和 BSD 3-Clause 许可证。
 
 ### Task 4: 实现 JNI RNNoise 桥
 
