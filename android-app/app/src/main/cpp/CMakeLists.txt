@@ -29,3 +29,23 @@ set_target_properties(rnnoise_core PROPERTIES
 )
 
 target_link_libraries(rnnoise_core PUBLIC m)
+
+add_library(soundboost_rnnoise SHARED
+    rnnoise_jni.c
+)
+
+set_target_properties(soundboost_rnnoise PROPERTIES
+    C_STANDARD 99
+    C_STANDARD_REQUIRED YES
+    C_EXTENSIONS NO
+)
+
+target_link_libraries(soundboost_rnnoise
+    PRIVATE
+        rnnoise_core
+        m
+)
+
+if(ANDROID)
+    target_link_libraries(soundboost_rnnoise PRIVATE log)
+endif()
