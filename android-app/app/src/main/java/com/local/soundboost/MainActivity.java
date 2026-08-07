@@ -4,8 +4,10 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.media.AudioDeviceInfo;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
+import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.media.MediaRecorder;
@@ -18,6 +20,7 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.SeekBar;
+import android.widget.Switch;
 import android.widget.TextView;
 
 import java.util.Locale;
@@ -36,12 +39,14 @@ public class MainActivity extends Activity {
     private SeekBar compressionSeek;
     private SeekBar lowCutSeek;
     private SeekBar limitSeek;
+    private Switch rnnoiseSwitch;
 
-    private int volumeDb = 6;
-    private int clarity = 45;
-    private int compression = 55;
+    private int volumeDb = 3;
+    private int clarity = 55;
+    private int compression = 35;
     private int lowCutHz = 90;
     private int limitDb = -8;
+    private boolean rnnoiseEnabled = true;
 
     @Override
     protected void onCreate(Bundle bundle) {
@@ -93,7 +98,21 @@ public class MainActivity extends Activity {
         inputMeter = meter(root, "输入");
         outputMeter = meter(root, "输出");
 
-        volumeSeek = slider(root, "音量", -12, 24, volumeDb, "dB", value -> {
+        rnnoiseSwitch = new Switch(this);
+        rnnoiseSwitch.setText("RNNoise 降噪");
+        rnnoiseSwitch.setTextSize(16);
+        rnnoiseSwitch.setTextColor(Color.rgb(24, 32, 29));
+        rnnoiseSwitch.setChecked(rnnoiseEnabled);
+        rnnoiseSwitch.setPadding(0, dp(14), 0, dp(4));
+        rnnoiseSwitch.setOnCheckedChangeListener((button, checked) -> {
+            rnnoiseEnabled = checked;
+            if (engine != null) {
+                engine.setDenoiseEnabled(checked);
+            }
+        });
+        root.addView(rnnoiseSwitch, matchWrap());
+
+        volumeSeek = slider(root, "音量", -12, 12, volumeDb, "dB", value -> {
             volumeDb = value;
             applySettings();
         });
@@ -109,7 +128,7 @@ public class MainActivity extends Activity {
             lowCutHz = value;
             applySettings();
         });
-        limitSeek = slider(root, "保护上限", -24, -1, limitDb, "dB", value -> {
+        limitSeek = slider(root, "数字峰值上限", -24, -1, limitDb, "dBFS", value -> {
             limitDb = value;
             applySettings();
         });
@@ -117,14 +136,17 @@ public class MainActivity extends Activity {
         LinearLayout presets = new LinearLayout(this);
         presets.setOrientation(LinearLayout.VERTICAL);
         presets.setPadding(0, dp(10), 0, 0);
-        presets.addView(preset("自然", 0, 30, 20, -10), matchWrap());
-        presets.addView(preset("明显变响", 9, 55, 55, -8), matchWrap());
-        presets.addView(preset("人声突出", 13, 75, 75, -6), matchWrap());
-        presets.addView(preset("舒适保护", 5, 65, 85, -14), matchWrap());
+        presets.addView(preset("自然", 3, 55, 25, -10), matchWrap());
+        presets.addView(preset("明显变响", 8, 60, 45, -8), matchWrap());
+        presets.addView(preset("人声突出", 10, 70, 55, -6), matchWrap());
+        presets.addView(preset("低峰值", 5, 60, 40, -14), matchWrap());
         root.addView(presets, matchWrap());
 
         TextView note = new TextView(this);
-        note.setText("建议戴耳机测试。第一次请从低音量开始，避免啸叫和刺耳。");
+        note.setText(
+                "使用手机麦克风输入、蓝牙耳机媒体输出。"
+                        + "数字峰值受限不代表耳机声压安全，请从低音量开始。"
+        );
         note.setTextSize(14);
         note.setTextColor(Color.rgb(92, 107, 101));
         note.setPadding(0, dp(16), 0, 0);
@@ -142,9 +164,28 @@ public class MainActivity extends Activity {
         if (running.get()) return;
         engine = new AudioEngine();
         engine.setSettings(volumeDb, clarity, compression, lowCutHz, limitDb);
+        engine.setDenoiseEnabled(rnnoiseEnabled);
         running.set(true);
-        status.setText("正在监听");
+        status.setText("正在启动音频");
         engine.start();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(
+            int requestCode,
+            String[] permissions,
+            int[] grantResults
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQ_RECORD_AUDIO) {
+            return;
+        }
+        if (grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            startListening();
+        } else {
+            status.setText("麦克风权限被拒绝");
+        }
     }
 
     private void stopListening() {
@@ -248,22 +289,30 @@ public class MainActivity extends Activity {
     }
 
     private class AudioEngine {
-        private static final int SAMPLE_RATE = 48000;
+        private static final int RNNOISE_SAMPLE_RATE = 48000;
+        private static final int FALLBACK_SAMPLE_RATE = 44100;
         private final AtomicBoolean active = new AtomicBoolean(false);
         private Thread thread;
+        private volatile AudioRecord activeRecorder;
+        private volatile AudioTrack activePlayer;
 
-        private volatile float volumeGain = dbToGain(6);
-        private volatile float clarityAmount = 0.45f;
-        private volatile float compressionAmount = 0.55f;
-        private volatile float lowCut = 90;
-        private volatile float limit = dbToGain(-8);
+        private volatile int configuredVolumeDb = 3;
+        private volatile int configuredClarity = 55;
+        private volatile int configuredCompression = 35;
+        private volatile int configuredLowCutHz = 90;
+        private volatile int configuredLimitDb = -8;
+        private volatile boolean denoiseEnabled = true;
 
         void setSettings(int volumeDb, int clarity, int compression, int lowCutHz, int limitDb) {
-            this.volumeGain = dbToGain(volumeDb);
-            this.clarityAmount = clarity / 100f;
-            this.compressionAmount = compression / 100f;
-            this.lowCut = lowCutHz;
-            this.limit = dbToGain(limitDb);
+            configuredVolumeDb = volumeDb;
+            configuredClarity = clarity;
+            configuredCompression = compression;
+            configuredLowCutHz = lowCutHz;
+            configuredLimitDb = limitDb;
+        }
+
+        void setDenoiseEnabled(boolean enabled) {
+            denoiseEnabled = enabled;
         }
 
         void start() {
@@ -274,6 +323,22 @@ public class MainActivity extends Activity {
 
         void stop() {
             active.set(false);
+            AudioRecord recorder = activeRecorder;
+            if (recorder != null) {
+                try {
+                    recorder.stop();
+                } catch (Exception ignored) {
+                    // The audio thread may already be releasing the recorder.
+                }
+            }
+            AudioTrack player = activePlayer;
+            if (player != null) {
+                try {
+                    player.pause();
+                } catch (Exception ignored) {
+                    // The audio thread may already be releasing the player.
+                }
+            }
             if (thread != null) {
                 try {
                     thread.join(700);
@@ -285,51 +350,96 @@ public class MainActivity extends Activity {
 
         private void loop() {
             Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO);
+            int sampleRate = selectSampleRate();
             int minIn = AudioRecord.getMinBufferSize(
-                    SAMPLE_RATE,
+                    sampleRate,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT
             );
             int minOut = AudioTrack.getMinBufferSize(
-                    SAMPLE_RATE,
+                    sampleRate,
                     AudioFormat.CHANNEL_OUT_MONO,
                     AudioFormat.ENCODING_PCM_16BIT
             );
-            int frames = Math.max(1024, Math.max(minIn, minOut) / 2);
+            if (minIn <= 0 || minOut <= 0) {
+                reportFailure("当前设备不支持实时音频采样");
+                return;
+            }
+            int bufferBytes = Math.max(minIn, minOut) * 2;
+            int frames = Math.max(960, bufferBytes / 2);
             short[] input = new short[frames];
-            short[] output = new short[frames];
+            short[] denoised = new short[frames + RnnoiseBridge.FRAME_SIZE - 1];
+            short[] output = new short[denoised.length];
 
-            AudioRecord recorder = createRecorder(frames * 4);
-            AudioTrack player = createPlayer(frames * 4);
-
-            Biquad highpass = Biquad.highpass(SAMPLE_RATE, lowCut, 0.7f);
-            Biquad presence = Biquad.peaking(SAMPLE_RATE, 2200, 1.0f, 4);
-            Biquad brightness = Biquad.highShelf(SAMPLE_RATE, 4200, 2);
+            AudioRecord recorder = null;
+            AudioTrack player = null;
+            RnnoiseFrameProcessor frameProcessor = null;
+            AudioDsp dsp = new AudioDsp(sampleRate);
 
             try {
+                recorder = createRecorder(sampleRate, bufferBytes);
+                preferBuiltInMicrophone(recorder);
+                player = createPlayer(sampleRate, bufferBytes);
+                activeRecorder = recorder;
+                activePlayer = player;
+                if (sampleRate == RNNOISE_SAMPLE_RATE) {
+                    frameProcessor = new RnnoiseFrameProcessor();
+                    frameProcessor.setEnabled(denoiseEnabled);
+                }
+
                 recorder.startRecording();
                 player.play();
-                while (active.get()) {
-                    highpass.updateHighpass(lowCut);
-                    presence.updatePeaking(2200, 1.0f, (clarityAmount - 0.5f) * 20f);
-                    brightness.updateHighShelf(4200, Math.max(0, (clarityAmount - 0.35f) * 7f));
+                reportRunningStatus(recorder, player, frameProcessor, sampleRate);
 
+                while (active.get()) {
                     int read = recorder.read(input, 0, input.length);
-                    float inPeak = 0;
-                    float outPeak = 0;
-                    for (int i = 0; i < read; i++) {
-                        float sample = input[i] / 32768f;
-                        inPeak = Math.max(inPeak, Math.abs(sample));
-                        sample = highpass.process(sample);
-                        sample = presence.process(sample);
-                        sample = brightness.process(sample);
-                        sample = compress(sample, compressionAmount);
-                        sample *= volumeGain;
-                        sample = limit(sample, limit);
-                        outPeak = Math.max(outPeak, Math.abs(sample));
-                        output[i] = (short) Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, sample * 32767f));
+                    if (read < 0) {
+                        throw new IllegalStateException("麦克风读取失败: " + read);
                     }
-                    player.write(output, 0, read);
+                    if (read == 0) {
+                        continue;
+                    }
+
+                    float inPeak = 0;
+                    for (int index = 0; index < read; index++) {
+                        inPeak = Math.max(inPeak, Math.abs(input[index] / 32768.0f));
+                    }
+
+                    int processed;
+                    if (frameProcessor == null) {
+                        System.arraycopy(input, 0, denoised, 0, read);
+                        processed = read;
+                    } else {
+                        frameProcessor.setEnabled(denoiseEnabled);
+                        boolean wasAvailable = frameProcessor.isAvailable();
+                        processed = frameProcessor.process(input, 0, read, denoised, 0);
+                        if (wasAvailable && !frameProcessor.isAvailable()) {
+                            runOnUiThread(() ->
+                                    status.setText("正在监听 · RNNoise 异常，已旁路")
+                            );
+                        }
+                    }
+                    if (processed == 0) {
+                        continue;
+                    }
+
+                    dsp.setSettings(
+                            configuredVolumeDb,
+                            configuredClarity,
+                            configuredCompression,
+                            configuredLowCutHz,
+                            configuredLimitDb
+                    );
+                    float outPeak = 0;
+                    for (int index = 0; index < processed; index++) {
+                        output[index] = dsp.process(denoised[index]);
+                        outPeak = Math.max(
+                                outPeak,
+                                Math.abs(output[index] / 32768.0f)
+                        );
+                    }
+                    writeFully(player, output, processed);
+
                     float finalIn = inPeak;
                     float finalOut = outPeak;
                     runOnUiThread(() -> {
@@ -338,39 +448,54 @@ public class MainActivity extends Activity {
                     });
                 }
             } catch (Exception ex) {
-                runOnUiThread(() -> status.setText("音频启动失败: " + ex.getMessage()));
+                if (active.get()) {
+                    reportFailure(ex.getMessage());
+                }
             } finally {
-                try { recorder.stop(); } catch (Exception ignored) {}
-                try { player.stop(); } catch (Exception ignored) {}
-                recorder.release();
-                player.release();
+                activeRecorder = null;
+                activePlayer = null;
+                if (frameProcessor != null) {
+                    frameProcessor.close();
+                }
+                if (recorder != null) {
+                    try { recorder.stop(); } catch (Exception ignored) {}
+                    recorder.release();
+                }
+                if (player != null) {
+                    try { player.stop(); } catch (Exception ignored) {}
+                    player.release();
+                }
             }
         }
 
-        private float compress(float sample, float amount) {
-            float sign = Math.signum(sample);
-            float abs = Math.abs(sample);
-            float threshold = 0.08f + (1f - amount) * 0.45f;
-            if (abs <= threshold) {
-                return sample * (1f + amount * 2.2f);
+        private int selectSampleRate() {
+            if (supportsSampleRate(RNNOISE_SAMPLE_RATE)) {
+                return RNNOISE_SAMPLE_RATE;
             }
-            float over = abs - threshold;
-            float ratio = 1f + amount * 10f;
-            return sign * (threshold + over / ratio) * (1f + amount * 0.9f);
+            if (supportsSampleRate(FALLBACK_SAMPLE_RATE)) {
+                return FALLBACK_SAMPLE_RATE;
+            }
+            return RNNOISE_SAMPLE_RATE;
         }
 
-        private float limit(float sample, float ceiling) {
-            if (sample > ceiling) return ceiling + (float) Math.tanh((sample - ceiling) * 2.5f) * 0.04f;
-            if (sample < -ceiling) return -ceiling + (float) Math.tanh((sample + ceiling) * 2.5f) * 0.04f;
-            return sample;
+        private boolean supportsSampleRate(int sampleRate) {
+            return AudioRecord.getMinBufferSize(
+                    sampleRate,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT
+            ) > 0 && AudioTrack.getMinBufferSize(
+                    sampleRate,
+                    AudioFormat.CHANNEL_OUT_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT
+            ) > 0;
         }
 
-        private AudioRecord createRecorder(int bufferBytes) {
+        private AudioRecord createRecorder(int sampleRate, int bufferBytes) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 return new AudioRecord.Builder()
                         .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
                         .setAudioFormat(new AudioFormat.Builder()
-                                .setSampleRate(SAMPLE_RATE)
+                                .setSampleRate(sampleRate)
                                 .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
                                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                                 .build())
@@ -379,14 +504,14 @@ public class MainActivity extends Activity {
             }
             return new AudioRecord(
                     MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                    SAMPLE_RATE,
+                    sampleRate,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
                     bufferBytes
             );
         }
 
-        private AudioTrack createPlayer(int bufferBytes) {
+        private AudioTrack createPlayer(int sampleRate, int bufferBytes) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 return new AudioTrack.Builder()
                         .setAudioAttributes(new AudioAttributes.Builder()
@@ -394,7 +519,7 @@ public class MainActivity extends Activity {
                                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                                 .build())
                         .setAudioFormat(new AudioFormat.Builder()
-                                .setSampleRate(SAMPLE_RATE)
+                                .setSampleRate(sampleRate)
                                 .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                                 .build())
@@ -404,97 +529,106 @@ public class MainActivity extends Activity {
             }
             return new AudioTrack(
                     android.media.AudioManager.STREAM_MUSIC,
-                    SAMPLE_RATE,
+                    sampleRate,
                     AudioFormat.CHANNEL_OUT_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
                     bufferBytes,
                     AudioTrack.MODE_STREAM
             );
         }
-    }
 
-    private static float dbToGain(float db) {
-        return (float) Math.pow(10, db / 20f);
-    }
-
-    private static class Biquad {
-        private final float sampleRate;
-        private float b0, b1, b2, a1, a2;
-        private float z1, z2;
-
-        private Biquad(float sampleRate) {
-            this.sampleRate = sampleRate;
+        private void preferBuiltInMicrophone(AudioRecord recorder) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                return;
+            }
+            AudioManager manager = (AudioManager) getSystemService(AUDIO_SERVICE);
+            if (manager == null) {
+                return;
+            }
+            for (AudioDeviceInfo device :
+                    manager.getDevices(AudioManager.GET_DEVICES_INPUTS)) {
+                if (device.getType() == AudioDeviceInfo.TYPE_BUILTIN_MIC) {
+                    recorder.setPreferredDevice(device);
+                    return;
+                }
+            }
         }
 
-        static Biquad highpass(float sr, float freq, float q) {
-            Biquad b = new Biquad(sr);
-            b.updateHighpass(freq);
-            return b;
+        private void writeFully(AudioTrack player, short[] output, int length) {
+            int offset = 0;
+            while (offset < length && active.get()) {
+                int written = player.write(output, offset, length - offset);
+                if (written < 0) {
+                    throw new IllegalStateException("耳机输出失败: " + written);
+                }
+                if (written == 0) {
+                    Thread.yield();
+                    continue;
+                }
+                offset += written;
+            }
         }
 
-        static Biquad peaking(float sr, float freq, float q, float gainDb) {
-            Biquad b = new Biquad(sr);
-            b.updatePeaking(freq, q, gainDb);
-            return b;
+        private void reportRunningStatus(
+                AudioRecord recorder,
+                AudioTrack player,
+                RnnoiseFrameProcessor frameProcessor,
+                int sampleRate
+        ) {
+            String rnnoiseState;
+            if (frameProcessor == null) {
+                rnnoiseState = "RNNoise 旁路（" + sampleRate + " Hz）";
+            } else if (denoiseEnabled && frameProcessor.isAvailable()) {
+                rnnoiseState = "RNNoise 开启";
+            } else {
+                rnnoiseState = "RNNoise 旁路";
+            }
+            String route = routeLabel(recorder, player);
+            runOnUiThread(() ->
+                    status.setText("正在监听 · " + rnnoiseState + " · " + route)
+            );
         }
 
-        static Biquad highShelf(float sr, float freq, float gainDb) {
-            Biquad b = new Biquad(sr);
-            b.updateHighShelf(freq, gainDb);
-            return b;
+        private String routeLabel(AudioRecord recorder, AudioTrack player) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                return "系统音频路由";
+            }
+            AudioDeviceInfo input = recorder.getRoutedDevice();
+            AudioDeviceInfo output = player.getRoutedDevice();
+            return "输入 " + deviceLabel(input) + " / 输出 " + deviceLabel(output);
         }
 
-        void updateHighpass(float freq) {
-            float omega = (float) (2 * Math.PI * freq / sampleRate);
-            float cos = (float) Math.cos(omega);
-            float sin = (float) Math.sin(omega);
-            float alpha = sin / 1.4f;
-            float nb0 = (1 + cos) / 2;
-            float nb1 = -(1 + cos);
-            float nb2 = (1 + cos) / 2;
-            float na0 = 1 + alpha;
-            float na1 = -2 * cos;
-            float na2 = 1 - alpha;
-            set(nb0, nb1, nb2, na0, na1, na2);
+        private String deviceLabel(AudioDeviceInfo device) {
+            if (device == null) {
+                return "系统默认";
+            }
+            switch (device.getType()) {
+                case AudioDeviceInfo.TYPE_BUILTIN_MIC:
+                    return "手机麦克风";
+                case AudioDeviceInfo.TYPE_BLUETOOTH_A2DP:
+                    return "蓝牙媒体耳机";
+                case AudioDeviceInfo.TYPE_BLUETOOTH_SCO:
+                    return "蓝牙通话设备";
+                case AudioDeviceInfo.TYPE_WIRED_HEADPHONES:
+                case AudioDeviceInfo.TYPE_WIRED_HEADSET:
+                    return "有线耳机";
+                case AudioDeviceInfo.TYPE_BUILTIN_SPEAKER:
+                    return "手机扬声器";
+                default:
+                    CharSequence name = device.getProductName();
+                    return name == null || name.length() == 0
+                            ? "系统设备"
+                            : name.toString();
+            }
         }
 
-        void updatePeaking(float freq, float q, float gainDb) {
-            float a = (float) Math.pow(10, gainDb / 40f);
-            float omega = (float) (2 * Math.PI * freq / sampleRate);
-            float cos = (float) Math.cos(omega);
-            float sin = (float) Math.sin(omega);
-            float alpha = sin / (2 * q);
-            set(1 + alpha * a, -2 * cos, 1 - alpha * a,
-                    1 + alpha / a, -2 * cos, 1 - alpha / a);
-        }
-
-        void updateHighShelf(float freq, float gainDb) {
-            float a = (float) Math.pow(10, gainDb / 40f);
-            float omega = (float) (2 * Math.PI * freq / sampleRate);
-            float cos = (float) Math.cos(omega);
-            float sin = (float) Math.sin(omega);
-            float beta = (float) Math.sqrt(a) / 0.707f;
-            set(a * ((a + 1) + (a - 1) * cos + beta * sin),
-                    -2 * a * ((a - 1) + (a + 1) * cos),
-                    a * ((a + 1) + (a - 1) * cos - beta * sin),
-                    (a + 1) - (a - 1) * cos + beta * sin,
-                    2 * ((a - 1) - (a + 1) * cos),
-                    (a + 1) - (a - 1) * cos - beta * sin);
-        }
-
-        private void set(float nb0, float nb1, float nb2, float na0, float na1, float na2) {
-            b0 = nb0 / na0;
-            b1 = nb1 / na0;
-            b2 = nb2 / na0;
-            a1 = na1 / na0;
-            a2 = na2 / na0;
-        }
-
-        float process(float in) {
-            float out = in * b0 + z1;
-            z1 = in * b1 + z2 - a1 * out;
-            z2 = in * b2 - a2 * out;
-            return out;
+        private void reportFailure(String message) {
+            active.set(false);
+            running.set(false);
+            String detail = message == null || message.length() == 0
+                    ? "未知错误"
+                    : message;
+            runOnUiThread(() -> status.setText("音频启动失败: " + detail));
         }
     }
 }
