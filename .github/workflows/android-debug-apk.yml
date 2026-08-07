@@ -21,14 +21,32 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android native toolchain
+        run: |
+          sdkmanager \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.0.12077973" \
+            "cmake;3.22.1"
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "8.10.2"
 
-      - name: Build debug APK
+      - name: Test and build debug APK
         working-directory: android-app
-        run: gradle :app:assembleDebug
+        run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace
+
+      - name: Verify ARM native libraries
+        run: |
+          unzip -l android-app/app/build/outputs/apk/debug/app-debug.apk \
+            | grep -q "lib/arm64-v8a/libsoundboost_rnnoise.so"
+          unzip -l android-app/app/build/outputs/apk/debug/app-debug.apk \
+            | grep -q "lib/armeabi-v7a/libsoundboost_rnnoise.so"
 
       - name: Upload APK
         uses: actions/upload-artifact@v6
