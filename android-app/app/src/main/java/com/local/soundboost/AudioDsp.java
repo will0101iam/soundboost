@@ -95,7 +95,7 @@ final class AudioDsp {
             return;
         }
 
-        highpass.updateHighpass(lowCutHz);
+        highpass.updateHighpass(lowCutHz, 0.7f);
         presence.updatePeaking(2200.0f, 1.0f, (clarity - 50.0f) * 0.08f);
         brightness.updateHighShelf(4200.0f, Math.max(0.0f, (clarity - 50.0f) * 0.04f));
         volumeGain = volumeGainFor(volumeDb);
